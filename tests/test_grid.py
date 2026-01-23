@@ -4,6 +4,7 @@ import random
 import unittest
 from unittest.mock import Mock, patch
 
+from mesa.errors import CellNotEmptyError
 from mesa.space import HexSingleGrid, MultiGrid, SingleGrid
 
 # Initial agent positions for testing
@@ -243,7 +244,7 @@ class TestSingleGridEnforcement(unittest.TestCase):
         """Test the SingleGrid empty count and enforcement."""
         assert len(self.grid.empties) == 9
         a = MockAgent(100)
-        with self.assertRaises(Exception):
+        with self.assertRaises(CellNotEmptyError):
             self.grid.place_agent(a, (0, 1))
 
         # Place the agent in an empty cell

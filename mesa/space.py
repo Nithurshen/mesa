@@ -39,6 +39,7 @@ import numpy.typing as npt
 
 # For Mypy
 from .agent import Agent, AgentSet
+from .errors import CellNotEmptyError
 
 # for better performance, we calculate the tuple to use in the is_integer function
 _types_integer = (int, np.integer)
@@ -992,7 +993,7 @@ class SingleGrid(_PropertyGrid):
             self._empty_mask[pos] = False
             agent.pos = pos
         else:
-            raise Exception("Cell not empty")
+            raise CellNotEmptyError(pos)
 
     def remove_agent(self, agent: Agent) -> None:
         """Remove the agent from the grid and set its pos attribute to None."""
