@@ -877,45 +877,61 @@ def test_get_neighborhood_mask():
 
 
 def test_select_cells():
-    """Test select_cells."""
+    """Test select_cells_mask and select_cells_indices."""
     dimensions = (5, 5)
     grid = OrthogonalMooreGrid(dimensions, torus=False, random=random.Random(42))
 
     data = np.random.default_rng(12456).random((5, 5))
     grid.add_property_layer(PropertyLayer.from_data("elevation", data))
 
-    # fixme, add an agent and update the np.all test accordingly
-    mask = grid.select_cells(
-        conditions={"elevation": lambda x: x > 0.5}, return_list=False, only_empty=True
+    # Test select_cells_mask
+    mask = grid.select_cells_mask(
+        conditions={"elevation": lambda x: x > 0.5}, only_empty=True
     )
     assert mask.shape == (5, 5)
     assert np.all(mask == (data > 0.5))
 
-    mask = grid.select_cells(
-        conditions={"elevation": lambda x: x > 0.5}, return_list=False, only_empty=False
+    mask = grid.select_cells_mask(
+        conditions={"elevation": lambda x: x > 0.5}, only_empty=False
     )
     assert mask.shape == (5, 5)
     assert np.all(mask == (data > 0.5))
 
-    # fixme add extreme_values highest and lowest
-    mask = grid.select_cells(
-        extreme_values={"elevation": "highest"}, return_list=False, only_empty=False
+    # Test extreme values with mask
+    mask = grid.select_cells_mask(
+        extreme_values={"elevation": "highest"}, only_empty=False
     )
     assert mask.shape == (5, 5)
     assert np.all(mask == (data == data.max()))
 
-    mask = grid.select_cells(
-        extreme_values={"elevation": "lowest"}, return_list=False, only_empty=False
+    mask = grid.select_cells_mask(
+        extreme_values={"elevation": "lowest"}, only_empty=False
     )
     assert mask.shape == (5, 5)
     assert np.all(mask == (data == data.min()))
 
     with pytest.raises(ValueError):
-        grid.select_cells(
-            extreme_values={"elevation": "weird"}, return_list=False, only_empty=False
-        )
+        grid.select_cells_mask(extreme_values={"elevation": "weird"}, only_empty=False)
 
-    # fixme add pre-specified mask to any other option
+    # Test select_cells_indices
+    indices = grid.select_cells_indices(
+        conditions={"elevation": lambda x: x > 0.5}, only_empty=False
+    )
+    # Verify that we got a list of tuples
+    assert isinstance(indices, list)
+    if len(indices) > 0:
+        assert isinstance(indices[0], tuple)
+
+    # Check that indices match the mask
+    expected_indices = list(zip(*np.where(data > 0.5)))
+    # Sort both to ensure order doesn't affect equality
+    assert sorted(indices) == sorted(expected_indices)
+
+    # Test deprecated select_cells warning
+    with pytest.warns(FutureWarning, match="select_cells is deprecated"):
+        grid.select_cells(
+            conditions={"elevation": lambda x: x > 0.5}, return_list=False
+        )
 
 
 def test_property_layer():

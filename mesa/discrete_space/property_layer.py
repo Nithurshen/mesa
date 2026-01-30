@@ -156,24 +156,49 @@ class PropertyLayer:
             self.data[mask] = vectorized_operation(target_data)
 
     def select_cells(self, condition: Callable, return_list=True):
-        """Find cells that meet a specified condition using NumPy's boolean indexing, in-place.
+        """Find cells that meet a specified condition (Deprecated).
+
+        .. warning::
+            This method is deprecated. Please use `select_cells_mask` or
+            `select_cells_indices` instead.
 
         Args:
             condition: A callable that returns a boolean array when applied to the data.
             return_list: (Optional) If True, return a list of (x, y) tuples. Otherwise, return a boolean array.
+        """
+        warnings.warn(
+            "select_cells is deprecated and will be removed in a future version. "
+            "Use select_cells_indices or select_cells_mask instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        if return_list:
+            return self.select_cells_indices(condition)
+        else:
+            return self.select_cells_mask(condition)
+
+    def select_cells_mask(self, condition: Callable) -> np.ndarray:
+        """Find cells that meet a specified condition and return a boolean mask.
+
+        Args:
+            condition: A callable that returns a boolean array when applied to the data.
 
         Returns:
-            A list of (x, y) tuples or a boolean array.
+            A boolean numpy array where True indicates the condition is met.
         """
-        # fixme: consider splitting into two separate functions
-        #  select_cells_boolean
-        #  select_cells_index
+        return condition(self.data)
 
-        condition_array = condition(self.data)
-        if return_list:
-            return list(zip(*np.where(condition_array)))
-        else:
-            return condition_array
+    def select_cells_indices(self, condition: Callable) -> list[tuple[int, ...]]:
+        """Find cells that meet a specified condition and return their coordinates.
+
+        Args:
+            condition: A callable that returns a boolean array when applied to the data.
+
+        Returns:
+            A list of coordinate tuples (e.g., [(x1, y1), (x2, y2)]).
+        """
+        condition_array = self.select_cells_mask(condition)
+        return list(zip(*np.where(condition_array)))
 
     def aggregate(self, operation: Callable):
         """Perform an aggregate operation (e.g., sum, mean) on a property across all cells.
@@ -330,23 +355,65 @@ class HasPropertyLayers:
         only_empty: bool = False,
         return_list: bool = True,
     ) -> list[Coordinate] | np.ndarray:
-        """Select cells based on property conditions, extreme values, and/or masks, with an option to only select empty cells.
+        """Select cells based on property conditions, extreme values, and/or masks (Deprecated).
+
+        .. warning::
+            This method is deprecated. Please use `select_cells_mask` or
+            `select_cells_indices` instead.
 
         Args:
-            conditions (dict): A dictionary where keys are property names and values are callables that return a boolean when applied.
-            extreme_values (dict): A dictionary where keys are property names and values are either 'highest' or 'lowest'.
-            masks (np.ndarray | list[np.ndarray], optional): A mask or list of masks to restrict the selection.
-            only_empty (bool, optional): If True, only select cells that are empty. Default is False.
-            return_list (bool, optional): If True, return a list of coordinates, otherwise return a mask.
+            conditions: A dictionary where keys are property names and values are
+                callables that return a boolean array when applied to the property layer data.
+            extreme_values: A dictionary where keys are property names and values are
+                either 'highest' or 'lowest'.
+            masks: A boolean mask or list of masks to restrict the selection.
+            only_empty: If True, only select cells that are empty. Defaults to False.
+            return_list: If True, return a list of coordinates. If False, return a boolean mask.
+                Defaults to True.
 
         Returns:
-            Union[list[Coordinate], np.ndarray]: Coordinates where conditions are satisfied or the combined mask.
+            Union[list[Coordinate], np.ndarray]: Coordinates where conditions are satisfied
+            or the combined boolean mask.
         """
-        # fixme: consider splitting into two separate functions
-        #  select_cells_boolean
-        #  select_cells_index
-        #  also we might want to change the naming to avoid classes with PropertyLayer
+        warnings.warn(
+            "select_cells is deprecated and will be removed in a future version. "
+            "Use select_cells_indices or select_cells_mask instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        if return_list:
+            return self.select_cells_indices(
+                conditions, extreme_values, masks, only_empty
+            )
+        else:
+            return self.select_cells_mask(conditions, extreme_values, masks, only_empty)
 
+    def select_cells_mask(
+        self,
+        conditions: dict | None = None,
+        extreme_values: dict | None = None,
+        masks: np.ndarray | list[np.ndarray] = None,
+        only_empty: bool = False,
+    ) -> np.ndarray:
+        """Return a boolean mask for cells matching the specified criteria.
+
+        Args:
+            conditions: A dictionary where keys are property names and values are
+                callables that return a boolean array when applied to the property layer data.
+            extreme_values: A dictionary where keys are property names and values are
+                either 'highest' or 'lowest' to select cells with extreme values.
+            masks: A single boolean mask or a list of boolean masks to restrict the selection.
+                Only cells that are True in all provided masks will be selected.
+            only_empty: If True, only select cells that are empty (contain no agents).
+                Defaults to False.
+
+        Returns:
+            np.ndarray: A boolean array of the same shape as the grid, where True indicates
+            the cell satisfies all conditions.
+
+        Raises:
+            ValueError: If an invalid mode (not 'highest' or 'lowest') is provided in extreme_values.
+        """
         # Initialize the combined mask
         combined_mask = np.ones(self.dimensions, dtype=bool)
 
@@ -376,7 +443,8 @@ class HasPropertyLayers:
             for property_name, mode in extreme_values.items():
                 prop_values = self._mesa_property_layers[property_name].data
 
-                # Create a masked array using the combined_mask
+                # Create a masked array using the combined_mask to ignore values
+                # in cells that have already been filtered out.
                 masked_values = np.ma.masked_array(prop_values, mask=~combined_mask)
 
                 if mode == "highest":
@@ -391,12 +459,33 @@ class HasPropertyLayers:
                 extreme_value_mask = prop_values == target_value
                 combined_mask = np.logical_and(combined_mask, extreme_value_mask)
 
-        # Generate output
-        if return_list:
-            selected_cells = list(zip(*np.where(combined_mask)))
-            return selected_cells
-        else:
-            return combined_mask
+        return combined_mask
+
+    def select_cells_indices(
+        self,
+        conditions: dict | None = None,
+        extreme_values: dict | None = None,
+        masks: np.ndarray | list[np.ndarray] = None,
+        only_empty: bool = False,
+    ) -> list[Coordinate]:
+        """Return a list of coordinates for cells matching the specified criteria.
+
+        Args:
+            conditions: A dictionary where keys are property names and values are
+                callables that return a boolean array when applied to the property layer data.
+            extreme_values: A dictionary where keys are property names and values are
+                either 'highest' or 'lowest' to select cells with extreme values.
+            masks: A single boolean mask or a list of boolean masks to restrict the selection.
+            only_empty: If True, only select cells that are empty. Defaults to False.
+
+        Returns:
+            list[Coordinate]: A list of (x, y) tuples (or other coordinate types)
+            corresponding to the cells that satisfy all conditions.
+        """
+        combined_mask = self.select_cells_mask(
+            conditions, extreme_values, masks, only_empty
+        )
+        return list(zip(*np.where(combined_mask)))
 
     def __getattr__(self, name: str) -> Any:  # noqa: D105
         try:
