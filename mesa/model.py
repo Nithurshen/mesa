@@ -348,13 +348,29 @@ class Model[A: Agent, S: Scenario](HasObservables):
     def run_model(self) -> None:
         """Run the model until the end condition is reached.
 
-        Overload as needed.
+        .. deprecated:: 3.0
+           Use a custom loop or `batch_run` instead.
         """
+        warnings.warn(
+            "run_model() is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         while self.running:
             self.step()
 
     def step(self) -> None:
-        """A single step. Fill in here."""
+        """A single step. Fill in here.
+
+        .. deprecated:: 3.0
+           Use `agent.step()` or custom logic instead. (Adjust version/message as needed)
+        """
+        warnings.warn(
+            "model.step() is deprecated and will be removed in a future version. "
+            "Please implement your own step logic or use the scheduler directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     def reset_randomizer(self, seed: int | None = None) -> None:
         """Reset the model random number generator.
