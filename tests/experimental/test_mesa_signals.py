@@ -844,3 +844,34 @@ def test_all_sentinel():
 
     a = pickle.loads(pickle.dumps(sentinel))  # noqa: S301
     assert a is ALL
+
+
+def test_class_level_subscribe():
+    """Test that subscriptions can be made at the class level and inherited by instances."""
+
+    class DummyAgent(HasObservables):
+        state = Observable()
+
+    handler_calls = []
+
+    def my_handler(msg):
+        old_val = msg.additional_kwargs.get("old")
+        new_val = msg.additional_kwargs.get("new")
+        handler_calls.append((old_val, new_val))
+
+    DummyAgent.subscribe("state", ObservableSignals.CHANGED, my_handler)
+
+    agent1 = DummyAgent()
+    agent2 = DummyAgent()
+
+    agent1.state = "active"
+    assert len(handler_calls) == 1
+    assert handler_calls[0] == (None, "active")
+
+    agent2.state = "inactive"
+    assert len(handler_calls) == 2
+    assert handler_calls[1] == (None, "inactive")
+
+    agent1.state = "done"
+    assert len(handler_calls) == 3
+    assert handler_calls[2] == ("active", "done")

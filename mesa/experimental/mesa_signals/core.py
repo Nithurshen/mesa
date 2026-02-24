@@ -277,6 +277,7 @@ class HasObservables:
         """Initialize a HasObservables subclass."""
         super().__init_subclass__(**kwargs)
         cls.observables = dict(descriptor_generator(cls))
+        cls._class_subscribers = defaultdict(list)
 
     def __init__(self, *args, **kwargs) -> None:
         """Initialize a HasObservables."""
@@ -288,9 +289,17 @@ class HasObservables:
     def _has_subscribers(self, name: str, signal_type: str | SignalType) -> bool:
         """Check if there are any subscribers for a given observable and signal type."""
         key = (name, signal_type)
-        if key not in self.subscribers:
-            return False
-        return len(self.subscribers[key]) > 0
+
+        has_instance_subscribers = (
+            key in self.subscribers and len(self.subscribers[key]) > 0
+        )
+        has_class_subscribers = (
+            hasattr(self, "_class_subscribers")
+            and key in self._class_subscribers
+            and len(self._class_subscribers[key]) > 0
+        )
+
+        return has_instance_subscribers or has_class_subscribers
 
     def observe(
         self,
@@ -419,9 +428,7 @@ class HasObservables:
 
         # because we are using a list of subscribers
         # we should update this list to subscribers that are still alive
-        key = (observable, signal_type)
-
-        if key not in self.subscribers:
+        if not self._has_subscribers(observable, signal_type):
             return
 
         signal = Message(
@@ -449,18 +456,31 @@ class HasObservables:
         signal_type = signal.signal_type
         key = (observable, signal_type)
 
-        observers = self.subscribers[key]
-        active_observers = []
-        for observer in observers:
-            if active_observer := observer():
-                active_observer(signal)
-                active_observers.append(observer)
-            # use iteration to also remove inactive observers
+        if key in self.subscribers:
+            observers = self.subscribers[key]
+            active_observers = []
+            for observer in observers:
+                if active_observer := observer():
+                    active_observer(signal)
+                    active_observers.append(observer)
 
-        if active_observers:
-            self.subscribers[key] = active_observers
-        else:
-            del self.subscribers[key]
+            if active_observers:
+                self.subscribers[key] = active_observers
+            else:
+                del self.subscribers[key]
+
+        if hasattr(self, "_class_subscribers") and key in self._class_subscribers:
+            class_observers = self._class_subscribers[key]
+            active_class_observers = []
+            for observer in class_observers:
+                if active_class_observer := observer():
+                    active_class_observer(signal)
+                    active_class_observers.append(observer)
+
+            if active_class_observers:
+                self._class_subscribers[key] = active_class_observers
+            else:
+                del self._class_subscribers[key]
 
     def batch(self):
         """Return a context manager that batches signals.
@@ -510,6 +530,57 @@ class HasObservables:
             return [signal_type]
         else:
             return signal_type
+
+    @classmethod
+    def subscribe(
+        cls,
+        observable_name: ObservableName,
+        signal_type: SignalSpec,
+        handler: Callable,
+    ):
+        """Subscribe at the class level to the Observable <name> for signal_type.
+
+        All instances of this class will trigger the handler when they emit this signal.
+        Handlers are stored as weak references to prevent memory leaks during experiments.
+
+        Args:
+            observable_name: name of the Observable to subscribe to
+            signal_type: the type of signal on the Observable to subscribe to
+            handler: the handler to call
+        """
+        names = (
+            [observable_name]
+            if isinstance(observable_name, str)
+            else (cls.observables.keys() if observable_name is ALL else observable_name)
+        )
+        target_signals = (
+            None
+            if signal_type is ALL
+            else (
+                [signal_type]
+                if isinstance(signal_type, (str, SignalType))
+                else signal_type
+            )
+        )
+
+        for name in names:
+            if name not in cls.observables:
+                raise ValueError(
+                    f"you are trying to subscribe to {name}, but this Observable is not known"
+                )
+
+            signal_types = target_signals or cls.observables[name]
+
+            for st in signal_types:
+                if st not in cls.observables[name]:
+                    raise ValueError(
+                        f"you are trying to subscribe to a signal of {st} "
+                        f"on Observable {name}, which does not emit this signal_type"
+                    )
+
+            ref = create_weakref(handler)
+            for st in signal_types:
+                cls._class_subscribers[(name, st)].append(ref)
 
 
 def descriptor_generator(
