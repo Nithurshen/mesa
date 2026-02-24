@@ -849,7 +849,7 @@ def test_all_sentinel():
 def test_class_level_subscribe():
     """Test that subscriptions can be made at the class level and inherited by instances."""
 
-    class DummyAgent(HasObservables):
+    class DummyAgent(HasEmitters):
         state = Observable()
 
     handler_calls = []
@@ -859,7 +859,7 @@ def test_class_level_subscribe():
         new_val = msg.additional_kwargs.get("new")
         handler_calls.append((old_val, new_val))
 
-    DummyAgent.subscribe("state", ObservableSignals.CHANGED, my_handler)
+    DummyAgent.observe_class("state", ObservableSignals.CHANGED, my_handler)
 
     agent1 = DummyAgent()
     agent2 = DummyAgent()

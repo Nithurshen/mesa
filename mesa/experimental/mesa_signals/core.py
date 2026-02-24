@@ -21,7 +21,7 @@ import functools
 import weakref
 from collections import defaultdict, namedtuple
 from collections.abc import Callable, Generator, Iterable
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from mesa.experimental.mesa_signals.signals_util import (
     ALL,
@@ -271,6 +271,10 @@ class HasEmitters:
     ]  # (observable_name, signal_type) -> list of weakref subscribers
     observables: dict[str, type[SignalType] | frozenset[SignalType]]
 
+    _class_subscribers: ClassVar[dict[tuple[str, SignalType], list[weakref.ref]]] = (
+        defaultdict(list)
+    )
+
     def __init_subclass__(cls, **kwargs):
         """Initialize a HasEmitters subclass."""
         super().__init_subclass__(**kwargs)
@@ -292,9 +296,7 @@ class HasEmitters:
             key in self.subscribers and len(self.subscribers[key]) > 0
         )
         has_class_subscribers = (
-            hasattr(self, "_class_subscribers")
-            and key in self._class_subscribers
-            and len(self._class_subscribers[key]) > 0
+            key in self._class_subscribers and len(self._class_subscribers[key]) > 0
         )
 
         return has_instance_subscribers or has_class_subscribers
@@ -317,27 +319,7 @@ class HasEmitters:
             does not emit the given signal_type
 
         """
-        names = self._process_name(observable_name)
-        target_signals = self._process_signal_type(signal_type)
-
-        for name in names:
-            if name not in self.observables:
-                raise ValueError(
-                    f"you are trying to subscribe to {name}, but this Observable is not known"
-                )
-
-            signal_types = target_signals or self.observables[name]
-
-            for st in signal_types:
-                if st not in self.observables[name]:
-                    raise ValueError(
-                        f"you are trying to subscribe to a signal of {st} "
-                        f"on Observable {name}, which does not emit this signal_type"
-                    )
-
-            ref = create_weakref(handler)
-            for st in signal_types:
-                self.subscribers[(name, st)].append(ref)
+        self._register_observer(self.subscribers, observable_name, signal_type, handler)
 
     def unobserve(
         self,
@@ -454,8 +436,11 @@ class HasEmitters:
         signal_type = signal.signal_type
         key = (observable, signal_type)
 
-        if key in self.subscribers:
-            observers = self.subscribers[key]
+        for subs_dict in (self.subscribers, self._class_subscribers):
+            observers = subs_dict.get(key, [])
+            if not observers:
+                continue
+
             active_observers = []
             for observer in observers:
                 if active_observer := observer():
@@ -463,22 +448,9 @@ class HasEmitters:
                     active_observers.append(observer)
 
             if active_observers:
-                self.subscribers[key] = active_observers
+                subs_dict[key] = active_observers
             else:
-                del self.subscribers[key]
-
-        if hasattr(self, "_class_subscribers") and key in self._class_subscribers:
-            class_observers = self._class_subscribers[key]
-            active_class_observers = []
-            for observer in class_observers:
-                if active_class_observer := observer():
-                    active_class_observer(signal)
-                    active_class_observers.append(observer)
-
-            if active_class_observers:
-                self._class_subscribers[key] = active_class_observers
-            else:
-                del self._class_subscribers[key]
+                del subs_dict[key]
 
     def batch(self):
         """Return a context manager that batches signals.
@@ -509,17 +481,19 @@ class HasEmitters:
 
         return _SuppressContext(self)
 
-    def _process_name(self, name: ObservableName) -> Iterable[str]:
+    @classmethod
+    def _process_name(cls, name: ObservableName) -> Iterable[str]:
         """Convert name to an iterable of observable names."""
         if name is ALL:
-            return self.observables.keys()
+            return cls.observables.keys()
         elif isinstance(name, str):
             return [name]
         else:
             return name
 
+    @classmethod
     def _process_signal_type(
-        self, signal_type: SignalSpec
+        cls, signal_type: SignalSpec
     ) -> Iterable[SignalType] | None:
         """Convert signal_type to an iterable of signal types."""
         if signal_type is ALL:
@@ -530,7 +504,7 @@ class HasEmitters:
             return signal_type
 
     @classmethod
-    def subscribe(
+    def observe_class(
         cls,
         observable_name: ObservableName,
         signal_type: SignalSpec,
@@ -546,20 +520,21 @@ class HasEmitters:
             signal_type: the type of signal on the Observable to subscribe to
             handler: the handler to call
         """
-        names = (
-            [observable_name]
-            if isinstance(observable_name, str)
-            else (cls.observables.keys() if observable_name is ALL else observable_name)
+        cls._register_observer(
+            cls._class_subscribers, observable_name, signal_type, handler
         )
-        target_signals = (
-            None
-            if signal_type is ALL
-            else (
-                [signal_type]
-                if isinstance(signal_type, (str, SignalType))
-                else signal_type
-            )
-        )
+
+    @classmethod
+    def _register_observer(
+        cls,
+        subs_dict: dict,
+        observable_name: ObservableName,
+        signal_type: SignalSpec,
+        handler: Callable,
+    ):
+        """Shared logic to validate and register an observer to a dictionary."""
+        names = cls._process_name(observable_name)
+        target_signals = cls._process_signal_type(signal_type)
 
         for name in names:
             if name not in cls.observables:
@@ -578,7 +553,7 @@ class HasEmitters:
 
             ref = create_weakref(handler)
             for st in signal_types:
-                cls._class_subscribers[(name, st)].append(ref)
+                subs_dict[(name, st)].append(ref)
 
 
 def descriptor_generator(
