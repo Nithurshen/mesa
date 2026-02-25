@@ -21,6 +21,7 @@ combining agent-based modeling with event scheduling.
 from __future__ import annotations
 
 import itertools
+import types
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
@@ -31,6 +32,25 @@ from weakref import WeakMethod, ref
 
 if TYPE_CHECKING:
     from mesa import Model
+
+
+def _create_callable_reference(function: Callable):
+    """Validate and create a weak-reference wrapper for an event callback."""
+    if not callable(function):
+        raise TypeError("function must be a callable")
+
+    if isinstance(function, types.FunctionType) and function.__name__ == "<lambda>":
+        raise ValueError("function must be alive at Event creation.")
+
+    if isinstance(function, MethodType):
+        function_ref = WeakMethod(function)
+    else:
+        try:
+            function_ref = ref(function)
+        except TypeError as exc:
+            raise TypeError("function must be weak referenceable") from exc
+
+    return function_ref
 
 
 class Priority(IntEnum):
@@ -57,9 +77,10 @@ class Event:
 
 
     Notes:
-        simulation events use a weak reference to the callable. Therefore, you cannot pass a lambda function in fn.
-        A simulation event where the callable no longer exists (e.g., because the agent has been removed from the model)
-        will fail silently.
+        Simulation events use a weak reference to the callable.
+        If the callback no longer exists at execution time (e.g., because an agent
+        has been removed), execution will fail silently.
+        Lambda callbacks are rejected at Event creation.
 
     """
 
@@ -87,19 +108,14 @@ class Event:
             function_kwargs: keyword arguments for the callable
         """
         super().__init__()
-        if not callable(function):
-            raise Exception()
-
         self.time = time
         self.priority = priority.value
         self._canceled = False
 
-        if isinstance(function, MethodType):
-            function = WeakMethod(function)
-        else:
-            function = ref(function)
+        weak_ref_fn = _create_callable_reference(function)
 
-        self.fn = function
+        self.fn = weak_ref_fn
+
         self.unique_id = next(self._ids)
         self.function_args = function_args if function_args else []
         self.function_kwargs = function_kwargs if function_kwargs else {}
@@ -118,13 +134,13 @@ class Event:
         self.function_args = []
         self.function_kwargs = {}
 
-    def __lt__(self, other):  # noqa
-        # Define a total ordering for events to be used by the heapq
-        return (self.time, self.priority, self.unique_id) < (
-            other.time,
-            other.priority,
-            other.unique_id,
-        )
+    def __lt__(self, other):
+        """Define a total ordering for events to be used by the heapq."""
+        if self.time != other.time:
+            return self.time < other.time
+        if self.priority != other.priority:
+            return self.priority < other.priority
+        return self.unique_id < other.unique_id
 
     def __getstate__(self):
         """Prepare state for pickling."""
@@ -139,12 +155,9 @@ class Event:
         """Restore state after unpickling."""
         fn = state.pop("_fn_strong")
         self.__dict__.update(state)
-        # Recreate weak reference
+        # Recreate callable reference strategy.
         if fn is not None:
-            if isinstance(fn, MethodType):
-                self.fn = WeakMethod(fn)
-            else:
-                self.fn = ref(fn)
+            self.fn = _create_callable_reference(fn)
         else:
             self.fn = None
 
@@ -175,6 +188,11 @@ class Schedule:
                 f"Schedule count must be > 0 if provided, got {self.count}"
             )
 
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError(
+                f"Schedule start ({self.start}) cannot be after end ({self.end})"
+            )
+
 
 class EventGenerator:
     """A generator that creates recurring events based on a Schedule.
@@ -187,6 +205,13 @@ class EventGenerator:
         function: The callable to execute for each generated event
         schedule: The Schedule defining when events occur
         priority: Priority level for generated events
+
+    Notes:
+        Event generators use a weak reference to the callable. Therefore, you cannot pass a lambda function in fn.
+        A simulation event where the callable no longer exists (e.g., because the agent has been removed from the model)
+        will fail silently. If you want to use functools.partial, please assign the partial function to a variable
+        prior to creating the generator.
+
     """
 
     def __init__(
@@ -206,7 +231,7 @@ class EventGenerator:
             priority: Priority level for generated events
         """
         self.model = model
-        self.function = function
+        self.function = _create_callable_reference(function)
         self.schedule = schedule
         self.priority = priority
 
@@ -227,7 +252,10 @@ class EventGenerator:
     def _get_interval(self) -> float | int:
         """Get the next interval value."""
         if callable(self.schedule.interval):
-            return self.schedule.interval(self.model)
+            interval = self.schedule.interval(self.model)
+            if interval < 0:
+                raise ValueError(f"Interval must be > 0, got {interval}")
+            return interval
         return self.schedule.interval
 
     def _should_stop(self, next_time: float) -> bool:
@@ -242,7 +270,16 @@ class EventGenerator:
         if not self._active:
             return
 
-        self.function()
+        # Check weakref HERE (execution time), not in property getter
+        # This matches Event class behavior - weakref check during execution
+        fn = self.function()
+        if fn is None:
+            # Stop the generator if weakref is dead
+            self.stop()
+            return  # Silent no-op (no error raised)
+
+        # Execute the function
+        fn()
         self._execution_count += 1
 
         # Schedule next event if we shouldn't stop
@@ -283,18 +320,38 @@ class EventGenerator:
         self._schedule_next(start_time)
         return self
 
-    def stop(self) -> EventGenerator:
-        """Stop the event generator immediately.
-
-        Returns:
-            Self for method chaining
-        """
+    def stop(self):
+        """Stop the event generator immediately."""
         self._active = False
         if self._current_event is not None:
             self._current_event.cancel()
             self._current_event = None
         self.model._event_generators.discard(self)
-        return self
+
+    def __getstate__(self):
+        """Prepare state for pickling."""
+        state = self.__dict__.copy()
+        fn = self.function() if self.function is not None else None
+        state["_fn_strong"] = fn
+        state["function"] = None
+        return state
+
+    def __setstate__(self, state):
+        """Restore state after unpickling."""
+        # Keep strong reference alive during entire method
+        fn = state.pop("_fn_strong")
+
+        # Update state first (keeps references alive)
+        self.__dict__.update(state)
+
+        # Now recreate weak reference
+        if fn is not None:
+            if isinstance(fn, MethodType):
+                self.function = WeakMethod(fn)
+            else:
+                self.function = ref(fn)
+        else:
+            self.function = None
 
 
 class EventList:
@@ -359,10 +416,12 @@ class EventList:
         return len(self) == 0
 
     def __contains__(self, event: Event) -> bool:  # noqa
+        if event.CANCELED:
+            return False
         return event in self._events
 
     def __len__(self) -> int:  # noqa
-        return len(self._events)
+        return len([e for e in self._events if not e.CANCELED])
 
     def __repr__(self) -> str:
         """Return a string representation of the event list."""
