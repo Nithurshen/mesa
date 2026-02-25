@@ -875,3 +875,45 @@ def test_class_level_subscribe():
     agent1.state = "done"
     assert len(handler_calls) == 3
     assert handler_calls[2] == ("active", "done")
+
+
+def test_unobserve_class():
+    """Test that class-level subscriptions can be unobserved."""
+
+    class DummyAgent(HasEmitters):
+        state = Observable()
+
+    handler_calls = []
+
+    def my_handler(msg):
+        handler_calls.append(msg.additional_kwargs.get("new"))
+
+    DummyAgent.observe_class("state", ObservableSignals.CHANGED, my_handler)
+    agent1 = DummyAgent()
+    agent1.state = "active"
+    assert len(handler_calls) == 1
+
+    DummyAgent.unobserve_class("state", ObservableSignals.CHANGED, my_handler)
+    agent1.state = "inactive"
+    assert len(handler_calls) == 1
+
+
+def test_clear_all_class_subscriptions():
+    """Test that all class-level subscriptions can be cleared."""
+
+    class DummyAgent(HasEmitters):
+        state = Observable()
+
+    handler_calls = []
+
+    def my_handler(msg):
+        handler_calls.append(msg.additional_kwargs.get("new"))
+
+    DummyAgent.observe_class("state", ObservableSignals.CHANGED, my_handler)
+    agent1 = DummyAgent()
+    agent1.state = "active"
+    assert len(handler_calls) == 1
+
+    DummyAgent.clear_all_class_subscriptions("state")
+    agent1.state = "inactive"
+    assert len(handler_calls) == 1

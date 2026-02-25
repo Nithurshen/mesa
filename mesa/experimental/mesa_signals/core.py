@@ -321,6 +321,35 @@ class HasEmitters:
         """
         self._register_observer(self.subscribers, observable_name, signal_type, handler)
 
+    @classmethod
+    def _unregister_observer(
+        cls,
+        subs_dict: dict,
+        observable_name: ObservableName,
+        signal_type: SignalSpec,
+        handler: Callable,
+    ):
+        """Shared logic to validate and unregister an observer from a dictionary."""
+        names = cls._process_name(observable_name)
+        target_signals = cls._process_signal_type(signal_type)
+
+        for name in names:
+            signal_types = target_signals or cls.observables[name]
+
+            for st in signal_types:
+                key = (name, st)
+                if key in subs_dict:
+                    remaining = []
+                    for ref in subs_dict[key]:
+                        if subscriber := ref():  # noqa: SIM102
+                            if subscriber != handler:
+                                remaining.append(ref)
+
+                    if remaining:
+                        subs_dict[key] = remaining
+                    else:
+                        del subs_dict[key]
+
     def unobserve(
         self,
         observable_name: ObservableName,
@@ -335,30 +364,45 @@ class HasEmitters:
             handler: the handler that is unsubscribing
 
         """
-        names = self._process_name(observable_name)
-        target_signals = self._process_signal_type(signal_type)
+        self._unregister_observer(
+            self.subscribers, observable_name, signal_type, handler
+        )
 
-        for name in names:
-            # we need to do this here because signal types might
-            # differ for name so for each name we need to check
-            signal_types = target_signals or self.observables[name]
+    @classmethod
+    def unobserve_class(
+        cls,
+        observable_name: ObservableName,
+        signal_type: SignalSpec,
+        handler: Callable,
+    ):
+        """Unsubscribe at the class level to the Observable <name> for signal_type.
 
-            for st in signal_types:
-                key = (name, st)
-                if key in self.subscribers:
-                    remaining = []
-                    for ref in self.subscribers[key]:
-                        if subscriber := ref():  # noqa: SIM102
-                            if subscriber != handler:
-                                remaining.append(ref)
+        Args:
+            observable_name: name of the Observable to unsubscribe from
+            signal_type: the type of signal on the Observable to unsubscribe to
+            handler: the handler that is unsubscribing
+        """
+        cls._unregister_observer(
+            cls._class_subscribers, observable_name, signal_type, handler
+        )
 
-                    if remaining:
-                        self.subscribers[key] = remaining
-                    else:
-                        del self.subscribers[key]
+    @classmethod
+    def _clear_all_subscriptions_from_dict(cls, subs_dict: dict, name: ObservableName):
+        """Shared logic to clear all subscriptions for an observable."""
+        if name is ALL:
+            subs_dict.clear()
+        elif isinstance(name, str):
+            keys_to_remove = [k for k in subs_dict if k[0] == name]
+            for k in keys_to_remove:
+                del subs_dict[k]
+        else:
+            for n in name:
+                keys_to_remove = [k for k in subs_dict if k[0] == n]
+                for k in keys_to_remove:
+                    del subs_dict[k]
 
     def clear_all_subscriptions(self, name: ObservableName):
-        """Clears all subscriptions for the observable <name>.
+        """Clears all instance-level subscriptions for the observable <name>.
 
         if name is ALL, all subscriptions are removed
 
@@ -366,18 +410,18 @@ class HasEmitters:
             name: name of the Observable to unsubscribe for all signal types
 
         """
-        if name is ALL:
-            self.subscribers.clear()
-        elif isinstance(name, str):
-            keys_to_remove = [k for k in self.subscribers if k[0] == name]
-            for k in keys_to_remove:
-                del self.subscribers[k]
-        else:
-            for n in name:
-                keys_to_remove = [k for k in self.subscribers if k[0] == n]
-                for k in keys_to_remove:
-                    del self.subscribers[k]
-                # ignore when unsubscribing to Observables that have no subscription
+        self._clear_all_subscriptions_from_dict(self.subscribers, name)
+
+    @classmethod
+    def clear_all_class_subscriptions(cls, name: ObservableName):
+        """Clears all class-level subscriptions for the observable <name>.
+
+        if name is ALL, all subscriptions are removed
+
+        Args:
+            name: name of the Observable to unsubscribe for all signal types
+        """
+        cls._clear_all_subscriptions_from_dict(cls._class_subscribers, name)
 
     def notify(
         self,
