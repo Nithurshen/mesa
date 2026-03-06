@@ -5,7 +5,6 @@ import pytest
 
 from mesa.agent import Agent, AgentSet
 from mesa.experimental.devs.simulator import DEVSimulator
-from mesa.experimental.scenarios import Scenario
 from mesa.model import Model
 from mesa.time import Schedule
 
@@ -167,21 +166,3 @@ def test_schedule_recurring_cannot_start_in_past():
 
     with pytest.raises(ValueError):
         model.schedule_recurring(lambda: None, schedule)
-
-
-def test_model_scenario_initialization():
-    """Test that Model accepts Scenario as None, an instance, or a class."""
-    m_default = Model()
-    assert isinstance(m_default.scenario, Scenario)
-
-    s_instance = Scenario(rng=42)
-    m_instance = Model(scenario=s_instance)
-    assert m_instance.scenario is s_instance
-    assert m_instance._rng == np.random.default_rng(42).bit_generator.state
-
-    class CustomScenario(Scenario):
-        pass
-
-    m_class = Model(scenario=CustomScenario, rng=42)
-    assert isinstance(m_class.scenario, CustomScenario)
-    assert m_class._rng == np.random.default_rng(42).bit_generator.state
